@@ -17,4 +17,4 @@ mpiio: $(OBJ)
 .PHONY: clean
 
 clean:
-	rm -f mpiio *.o *~
+	rm -rf mpiio *.o *~ *.dSYM *.bbp
