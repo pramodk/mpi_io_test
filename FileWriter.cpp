@@ -3,7 +3,6 @@
 //
 
 #include "FileWriter.h"
-#include <vector>
 
 FileWriter::FileWriter(long num_bytes, long buf_size, MPI_Comm comm) {
     my_num_bytes = num_bytes;
@@ -14,10 +13,10 @@ FileWriter::FileWriter(long num_bytes, long buf_size, MPI_Comm comm) {
     MPI_Comm_rank(report_comm, &report_comm_rank);
 
     // first check how many report steps this rank can buffer
-    num_report_steps_can_buffer = max_buffer_size / my_num_bytes;
+    long steps = max_buffer_size / my_num_bytes;
 
     // now calculate global minimum
-    MPI_Allreduce(MPI_IN_PLACE, &num_report_steps_can_buffer, 1, MPI_LONG, MPI_MIN, report_comm);
+    MPI_Allreduce(&steps, &num_report_steps_can_buffer, 1, MPI_LONG, MPI_MIN, report_comm);
 }
 
 long FileWriter::number_report_steps_can_buffer() {
@@ -70,8 +69,42 @@ void FileWriter::setup_report_subcomms() {
 void FileWriter::setup_writer_subcomms() {
     int subcomm_rank = 0;
     MPI_Comm_rank(sub_report_comm, &subcomm_rank);
-    int comm_id = subcomm_rank == 0 ? 0 : 1;
+    int comm_id = (subcomm_rank == 0) ? 0 : 1;
     MPI_Comm_split(report_comm, comm_id, report_comm_rank, &aggregator_comm);
+}
+
+
+void FileWriter::setup_view(std::vector<int> &buffer_sizes, std::vector<MPI_Offset> &buffer_offsets) {
+
+    int num_report_elements = buffer_sizes.size();
+    std::vector<int> num_buffer_sizes;
+
+    if(sub_report_rank() == 0) {
+        num_buffer_sizes.reserve(sub_report_comm_size());
+    }
+
+    MPI_Gather(&num_report_elements, 1, MPI_INT, &num_buffer_sizes[0], 1, MPI_INT, 0, sub_report_comm);
+
+    std::vector<int> displacement;
+    long total_num_report_elements = 0;
+
+    if (sub_report_rank() == 0) {
+        displacement.reserve(sub_report_comm_size());
+        size_t offset = 0;
+
+        for (size_t i = 0; i < num_buffer_sizes.size(); i++) {
+            displacement[i] = offset;
+            offset += num_buffer_sizes[i];
+            total_num_report_elements += num_buffer_sizes[i];
+        }
+    }
+
+    aggregator_buffer_sizes.reserve(total_num_report_elements);
+    aggregator_buffer_offsets.reserve(total_num_report_elements);
+
+    MPI_Gatherv(&buffer_sizes[0], num_report_elements, MPI_INT, &aggregator_buffer_sizes[0], &num_buffer_sizes[0], &displacement[0], MPI_INT, 0, sub_report_comm);
+    MPI_Gatherv(&buffer_offsets[0], num_report_elements, MPI_INT, &aggregator_buffer_offsets[0], &num_buffer_sizes[0], &displacement[0], MPI_INT, 0, sub_report_comm);
+
 }
 
 void FileWriter::finalize() {

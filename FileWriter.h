@@ -7,6 +7,7 @@
 
 #include <mpi.h>
 #include <string>
+#include <vector>
 
 class FileWriter {
 
@@ -39,6 +40,16 @@ class FileWriter {
 
     // comm of all aggregator ranks
     MPI_Comm aggregator_comm;
+
+    // each cell element could be of different size
+    std::vector<int> aggregator_buffer_sizes;
+
+    // each cell element has offsets
+    std::vector<MPI_Offset > aggregator_buffer_offsets;
+
+    // report data buffer
+    void *data;
+
 
     int comm_rank(MPI_Comm c) {
         int rank;
@@ -79,6 +90,7 @@ public:
     void setup_report_subcomms();
     void setup_writer_subcomms();
     void finalize();
+    void setup_view(std::vector<int> &report_sizes, std::vector<MPI_Offset> &report_offsets);
 };
 
 
