@@ -6,9 +6,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <vector>
+#include "FileWriter.h"
 
 //#define MAX_BUFFER_IN_BYTES (8*1024*1024)
-#define MAX_BUFFER_IN_BYTES (8 * 5)
+#define MAX_BUFFER_IN_BYTES (8 * 1)
 
 void mpi_file_write_by_staging(void* data, int nbytes, int rank, int comm_size) {
     std::vector<int> sizes;
@@ -177,6 +178,11 @@ int main(int argc, char** argv) {
 
     MPI_File fh;
     MPI_Status status;
+
+    FileWriter fw(num_bytes, MAX_BUFFER_IN_BYTES, MPI_COMM_WORLD);
+
+    printf("Number of steps can buffer %d bytes and buffer %d is : %ld \n", num_bytes, MAX_BUFFER_IN_BYTES,
+           fw.number_report_steps_can_buffer());
 
     memUsageInfo("Before File Open");
 

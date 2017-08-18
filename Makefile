@@ -4,7 +4,7 @@ OPTFLAGS = -O2
 CXXFLAGS = $(OPTFLAGS) -g
 
 DEPS = utils.h
-OBJ = mpi_io_mem_usage.o utils.o
+OBJ = main.o utils.o
 
 all: mpiio
 
