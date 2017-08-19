@@ -8,6 +8,8 @@
 #endif
 #if defined(__APPLE__) && defined(__MACH__)
 #include "mach/mach.h"
+#include "utils.h"
+
 #else
 #include <malloc.h>
 #endif
@@ -15,10 +17,6 @@
 #include <cstdio>
 #include <mpi.h>
 #include <stdlib.h>
-
-size_t randomNumber(size_t min = 0, size_t max = 10000) {
-    return (rand() % (max - min + 1) + min);
-}
 
 uint64_t usageInBytes(int item) {
 #if defined(BLUEGENEQ)
@@ -86,12 +84,22 @@ double memUsageInfo(const char* msg) {
     MPI_Bcast(&avgUsageMB, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
+        printf("\t => MEMUSAGE :: ");
         if (msg) {
             printf(" %32s ", msg);
         }
-        printf("=> MemUsage Max = %.3lfMB Min = %.3lfMB Mean = %.3lfMB\n", maxUsageMB, minUsageMB,
-               avgUsageMB);
+        printf(" Max = %.3lfMB Min = %.3lfMB Mean = %.3lfMB\n", maxUsageMB, minUsageMB, avgUsageMB);
     }
 
     return usageMB;
+}
+
+ReportingData::~ReportingData() {
+    delete[] gids;
+    delete[] sizes;
+    delete[] mappingDisp;
+    delete[] disp;
+    delete[] mappingCount;
+    delete[] fakemapping;
+    delete[] fakedata;
 }
