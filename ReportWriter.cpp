@@ -173,7 +173,8 @@ void ReportWriter::setup_file_view(int* sizes, long long* displacements, int nel
 void ReportWriter::finalize() {
     MPI_Comm_free(&sub_report_comm);
     MPI_Comm_free(&aggregator_comm);
-    MPI_File_close(&fh);
+    if(is_aggregator)
+        MPI_File_close(&fh);
 }
 
 void ReportWriter::setup_view(int* sizes,
@@ -192,7 +193,8 @@ void ReportWriter::setup_view(int* sizes,
     setup_subcomms();
 
     // open file for writing
-    open_file();
+    if(is_aggregator)
+        open_file();
 
     // setup mpi file view
     setup_file_view(sizes, displacements, nelements);
@@ -220,9 +222,12 @@ void ReportWriter::write(void* data) {
                     &subcomm_displacements[0], MPI_BYTE, 0, sub_report_comm);
 
     check_mpi_error(error);
+    MPI_Barrier(report_comm);
 
     if (is_aggregator) {
-        error = MPI_File_write_all(fh, aggregated_data, aggregator_report_size, MPI_BYTE, &status);
+        // has problem!
+        //error = MPI_File_write_all(fh, aggregated_data, aggregator_report_size, MPI_BYTE, &status);
+        error = MPI_File_write(fh, aggregated_data, aggregator_report_size, MPI_BYTE, &status);
         check_mpi_error(error);
     }
 
