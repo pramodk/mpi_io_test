@@ -30,5 +30,6 @@ void demo_program_write_header(MPI_Comm comm_world,
 void demo_program_write_data(MPI_Comm comm_world,
                              ReportingData& rdata,
                              std::string report_filename);
+void check_mpi_error(int& error);
 
 #endif

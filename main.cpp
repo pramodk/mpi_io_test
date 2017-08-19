@@ -46,9 +46,15 @@ int main(int argc, char** argv) {
     printf("R.%4d REPORT %5d BYTES BUFFER %6zu BYTES BUFFER STEPS %d \n", rank, num_bytes,
            REPORT_BUFFER_SIZE, num_report_steps);
 
-    size_t AGGREGATOR_BUFFER_SIZE = 2*REPORT_BUFFER_SIZE;
+    size_t AGGREGATOR_BUFFER_SIZE = 1 * REPORT_BUFFER_SIZE;
 
-    writer.setup_view(rdata.sizes, rdata.disp, rdata.len, AGGREGATOR_BUFFER_SIZE);
+    demo_program_write_header(MPI_COMM_WORLD, rdata, report2);
+
+    MPI_Offset start_position = sizeof(int) * rdata.ngids;
+
+    writer.setup_view(rdata.sizes, rdata.disp, rdata.len, start_position, AGGREGATOR_BUFFER_SIZE);
+
+    writer.write(rdata.fakedata);
 
     writer.finalize();
 

@@ -8,21 +8,6 @@
 #include "utils.h"
 
 //-----------------------------------------------------------------------------------------------
-// Check MPI Error
-//-----------------------------------------------------------------------------------------------
-
-void check_mpi_error(int& error) {
-    if (error != MPI_SUCCESS) {
-        std::cerr << "Error in MPI Operation" << std::endl;
-        char message[1024];
-        int mlength;
-        MPI_Error_string(error, message, &mlength);
-        std::cerr << "MPI: " << message << std::endl;
-        abort();
-    }
-}
-
-//-----------------------------------------------------------------------------------------------
 // Open file with MPI (delete old file if require)
 //-----------------------------------------------------------------------------------------------
 
@@ -276,8 +261,8 @@ void demo_program_write_data(MPI_Comm comm_world,
     MPI_Status status;
 
     // after the mapping, the file advances to sizeof(int)*(sum of len across nodes)
-    MPI_Offset position_to_write = sizeof(int) * rdata.ngids;
-    prepareFileView(fh, report_filename, position_to_write, rdata.sizes, rdata.disp, rdata.len,
+    MPI_Offset start_offset = sizeof(int) * rdata.ngids;
+    prepareFileView(fh, report_filename, start_offset, rdata.sizes, rdata.disp, rdata.len,
                     comm_report);
     MPI_File_write_all(fh, rdata.fakedata, rdata.ntotaldata, MPI_BYTE, &status);
 

@@ -94,6 +94,21 @@ double memUsageInfo(const char* msg) {
     return usageMB;
 }
 
+//-----------------------------------------------------------------------------------------------
+// Check MPI Error
+//-----------------------------------------------------------------------------------------------
+
+void check_mpi_error(int& error) {
+    if (error != MPI_SUCCESS) {
+        std::cerr << "Error in MPI Operation" << std::endl;
+        char message[1024];
+        int mlength;
+        MPI_Error_string(error, message, &mlength);
+        std::cerr << "MPI: " << message << std::endl;
+        abort();
+    }
+}
+
 ReportingData::~ReportingData() {
     delete[] gids;
     delete[] sizes;

@@ -10,7 +10,6 @@
 #include <vector>
 
 class ReportWriter {
-
     // name of the report
     std::string report_name;
 
@@ -50,6 +49,19 @@ class ReportWriter {
     // each cell element has offsets
     std::vector<long long> aggregated_report_displacements;
 
+    // when aggregator gathers sizes, displacements and data we need
+    // displacements often. store it here
+    std::vector<int> subcomm_displacements;
+
+    // total bytes on each rank in sub comm report
+    std::vector<int> subcomm_report_sizes;
+
+    // mpi file type for i/o
+    MPI_Datatype filetype;
+
+    // offset from the beginning of file
+    MPI_Offset start_offset;
+
     // report data buffer
     void* data;
 
@@ -87,11 +99,17 @@ class ReportWriter {
   public:
     ReportWriter(std::string name, std::string filename, MPI_Comm comm);
     long number_steps_can_buffer(long report_size, long max_buffer_size);
-    void setup_view(int *sizes, long long *displacements, int nelements, long max_buffer);
+    void setup_view(int* sizes,
+                    long long* displacements,
+                    int nelements,
+                    MPI_Offset start_offset,
+                    long max_buffer);
     void open_file();
     void setup_subcomms();
     void finalize();
-    void setup_file_view(int *sizes, long long *displacements, int n);
+    void setup_file_view(int* sizes, long long* displacements, int n);
+
+    void write(void* data);
 };
 
 #endif  // MPI_MEM_USAGE_FILE_WRITER_H
