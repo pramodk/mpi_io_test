@@ -20,12 +20,12 @@ int open(std::string filename,
         FILE* quickClear = fopen(filename.c_str(), "r");
         if (quickClear) {
             fclose(quickClear);
-            MPI_File_delete(filename.c_str(), MPI_INFO_NULL);
+            MPI_File_delete((char*)filename.c_str(), MPI_INFO_NULL);
             quickClear = NULL;
         }
     }
 
-    int result = MPI_File_open(fileComm, filename.c_str(), amode, info, &fh);
+    int result = MPI_File_open(fileComm, (char*)filename.c_str(), amode, info, &fh);
     return result;
 }
 

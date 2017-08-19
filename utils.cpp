@@ -8,7 +8,6 @@
 #endif
 #if defined(__APPLE__) && defined(__MACH__)
 #include "mach/mach.h"
-#include "utils.h"
 
 #else
 #include <malloc.h>
@@ -17,6 +16,8 @@
 #include <cstdio>
 #include <mpi.h>
 #include <stdlib.h>
+#include <iostream>
+#include "utils.h"
 
 uint64_t usageInBytes(int item) {
 #if defined(BLUEGENEQ)

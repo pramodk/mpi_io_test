@@ -1,4 +1,6 @@
 #include <vector>
+#include <string.h>
+#include <stdlib.h>
 #include "ReportWriter.h"
 #include "utils.h"
 
@@ -7,7 +9,7 @@ int main(int argc, char** argv) {
 
     int rank, comm_size;
 
-    size_t REPORT_BUFFER_SIZE = 8;
+    size_t REPORT_BUFFER_SIZE = 4 * 1024 * 1024;
 
     MPI_Comm_size(MPI_COMM_WORLD, &comm_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -43,7 +45,7 @@ int main(int argc, char** argv) {
 
     int num_report_steps = writer.number_steps_can_buffer(num_bytes, REPORT_BUFFER_SIZE);
 
-    printf("R.%4d REPORT %5d BYTES BUFFER %6zu BYTES BUFFER STEPS %d \n", rank, num_bytes,
+    printf("R.%4d REPORT %5d BYTES BUFFER %6zu BYTES BUFFER STEPS %d\n", rank, num_bytes,
            REPORT_BUFFER_SIZE, num_report_steps);
 
     size_t AGGREGATOR_BUFFER_SIZE = 1 * REPORT_BUFFER_SIZE;

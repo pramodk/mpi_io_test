@@ -2,6 +2,7 @@
 // Created by Kumbhar Pramod Shivaji on 15.08.17.
 //
 
+#include <stdlib.h>
 #include <climits>
 #include "ReportWriter.h"
 #include "utils.h"
@@ -37,7 +38,7 @@ long ReportWriter::number_steps_can_buffer(long report_size, long max_buffer_siz
 
 void ReportWriter::open_file() {
     // only aggregator ranks open file for writing
-    MPI_File_open(aggregator_comm, filename.c_str(), MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
+    MPI_File_open(aggregator_comm, (char*)filename.c_str(), MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
 }
 
 void ReportWriter::setup_subcomms() {
@@ -87,6 +88,10 @@ void ReportWriter::setup_subcomms() {
 
     int comm_id = is_aggregator ? 0 : 1;
     MPI_Comm_split(report_comm, comm_id, report_comm_rank, &aggregator_comm);
+
+    if(report_comm_rank == 0) {
+        printf(" SUMMARY : TOTAL RANKS : %d TOTAL AGGREGATORS : %d \n", report_comm_size, aggregator_comm_size());
+    }
 }
 
 void ReportWriter::setup_file_view(int* sizes, long long* displacements, int nelements) {
@@ -207,8 +212,8 @@ void ReportWriter::write(void* data) {
 
     MPI_Barrier(report_comm);
 
-    printf("R. %d REPORT %ld BYTES AGGREGATING %ld BYTES \n", report_comm_rank, report_size,
-           aggregator_report_size);
+    printf("R. %d REPORT %ld BYTES AGGREGATING %ld BYTES IS_AGGREGATOR %d\n", report_comm_rank, report_size,
+           aggregator_report_size, int(is_aggregator));
 
     int error =
         MPI_Gatherv(data, (int)report_size, MPI_BYTE, aggregated_data, &subcomm_report_sizes[0],
