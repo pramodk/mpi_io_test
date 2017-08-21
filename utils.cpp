@@ -13,6 +13,7 @@
 #include <malloc.h>
 #endif
 
+#include <stdint.h>
 #include <cstdio>
 #include <mpi.h>
 #include <stdlib.h>
@@ -106,7 +107,7 @@ void check_mpi_error(int& error) {
         int mlength;
         MPI_Error_string(error, message, &mlength);
         std::cerr << "MPI: " << message << std::endl;
-        abort();
+        //abort();
     }
 }
 

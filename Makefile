@@ -1,6 +1,6 @@
 CXX = mpicxx
 
-OPTFLAGS = -O2
+OPTFLAGS = -O0
 CXXFLAGS = $(OPTFLAGS) -g -I.
 
 DEPS = utils.h
@@ -17,4 +17,4 @@ mpiio: $(OBJ)
 .PHONY: clean
 
 clean:
-	rm -rf mpiio *.o *~ *.dSYM *.bbp
+	rm -rf mpiio *.o *~ *.dSYM *.bbp reportinglib/*.o

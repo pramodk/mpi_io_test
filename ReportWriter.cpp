@@ -37,6 +37,7 @@ long ReportWriter::number_steps_can_buffer(long report_size, long max_buffer_siz
 }
 
 void ReportWriter::open_file() {
+
     // only aggregator ranks open file for writing
     MPI_File_open(aggregator_comm, (char*)filename.c_str(), MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
 }
@@ -136,7 +137,7 @@ void ReportWriter::setup_file_view(int* sizes, long long* displacements, int nel
 
     if (is_aggregator) {
         std::vector<MPI_Aint> file_displacements;
-        file_displacements.reserve(total_subcomm_nelements);
+        file_displacements.resize(total_subcomm_nelements);
         subcomm_displacements.resize(sub_report_comm_size());
         subcomm_report_sizes.resize(sub_report_comm_size());
 
@@ -147,7 +148,7 @@ void ReportWriter::setup_file_view(int* sizes, long long* displacements, int nel
         for (size_t i = 0; i < sub_report_comm_size(); i++) {
             length = 0;
             for (size_t j = 0; j < subcomm_nelements[i]; j++) {
-                file_displacements.push_back((MPI_Aint)aggregated_report_displacements[k]);
+                file_displacements[k] = (MPI_Offset)aggregated_report_displacements[k];
                 length += aggregated_report_sizes[k];
                 aggregator_report_size += aggregated_report_sizes[k];
                 k++;
@@ -166,6 +167,7 @@ void ReportWriter::setup_file_view(int* sizes, long long* displacements, int nel
 
         error = MPI_File_set_view(fh, start_offset, MPI_BYTE, filetype, "native", MPI_INFO_NULL);
 
+        MPI_Type_free(&filetype);
         check_mpi_error(error);
     }
 }
@@ -217,6 +219,10 @@ void ReportWriter::write(void* data) {
     printf("R. %d REPORT %ld BYTES AGGREGATING %ld BYTES IS_AGGREGATOR %d\n", report_comm_rank, report_size,
            aggregator_report_size, int(is_aggregator));
 
+    if(report_comm_rank == 0) {
+        printf(" STARTED DATA AGGREGATION \n");
+    }
+
     int error =
         MPI_Gatherv(data, (int)report_size, MPI_BYTE, aggregated_data, &subcomm_report_sizes[0],
                     &subcomm_displacements[0], MPI_BYTE, 0, sub_report_comm);
@@ -224,11 +230,23 @@ void ReportWriter::write(void* data) {
     check_mpi_error(error);
     MPI_Barrier(report_comm);
 
+    if(report_comm_rank == 0) {
+        printf(" FINISHED DATA AGGREGATION \n");
+    }
+
     if (is_aggregator) {
         // has problem!
         //error = MPI_File_write_all(fh, aggregated_data, aggregator_report_size, MPI_BYTE, &status);
+
+        // no problem with non collective version when we enable aggregation
         error = MPI_File_write(fh, aggregated_data, aggregator_report_size, MPI_BYTE, &status);
         check_mpi_error(error);
+    }
+
+    MPI_Barrier(report_comm);
+
+    if(report_comm_rank == 0) {
+        printf(" FINISHED DATA WRITING \n");
     }
 
     if (is_aggregator)
