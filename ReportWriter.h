@@ -1,18 +1,11 @@
-//
-// Created by Kumbhar Pramod Shivaji on 15.08.17.
-//
-
-#ifndef MPI_MEM_USAGE_FILE_WRITER_H
-#define MPI_MEM_USAGE_FILE_WRITER_H
+#ifndef REPORT_WRITER_H
+#define REPORT_WRITER_H
 
 #include <mpi.h>
 #include <string>
 #include <vector>
 
 class ReportWriter {
-    // name of the report
-    std::string report_name;
-
     // name of the file
     std::string filename;
 
@@ -26,7 +19,10 @@ class ReportWriter {
     bool is_aggregator;
 
     // size of buffer for all aggregated bytes when is_aggregator is true
-    long aggregator_report_size;
+    long ag_report_size;
+
+    // sum of report size in subcomm; this is same as ag_report_size on rank 0 of subcomm
+    long subcomm_report_size;
 
     // rank in the report_comm
     int report_comm_rank;
@@ -43,49 +39,31 @@ class ReportWriter {
     // comm of all aggregator ranks
     MPI_Comm aggregator_comm;
 
-    // each cell element could be of different size
-    std::vector<int> aggregated_report_sizes;
+    // when aggregator gathers sizes, displacements into aggregator's
+    // shared window are stored here
+    std::vector<MPI_Aint> sender_displacements;
 
-    // each cell element has offsets
-    std::vector<long long> aggregated_report_displacements;
+    // sender sizes
+    std::vector<int> sender_sizes;
 
-    // when aggregator gathers sizes, displacements and data we need
-    // displacements often. store it here
-    std::vector<int> subcomm_displacements;
-
-    // total bytes on each rank in sub comm report
-    std::vector<int> subcomm_report_sizes;
+    int sender_npieces;
 
     // mpi file type for i/o
     MPI_Datatype filetype;
 
     // offset from the beginning of file
-    MPI_Offset start_offset;
-
-    // report data buffer
-    void* data;
+    MPI_Offset file_offset;
 
     // file handle
     MPI_File fh;
 
-    int comm_rank(MPI_Comm c) {
-        int rank;
-        MPI_Comm_rank(c, &rank);
-        return rank;
-    }
+    // print all messages
+    bool verbose;
 
     int comm_size(MPI_Comm c) {
         int size;
         MPI_Comm_size(c, &size);
         return size;
-    }
-
-    int sub_report_comm_rank() {
-        return comm_rank(sub_report_comm);
-    }
-
-    int aggregator_comm_rank() {
-        return comm_rank(aggregator_comm);
     }
 
     int sub_report_comm_size() {
@@ -96,20 +74,23 @@ class ReportWriter {
         return comm_size(aggregator_comm);
     }
 
-  public:
-    ReportWriter(std::string name, std::string filename, MPI_Comm comm);
-    long number_steps_can_buffer(long report_size, long max_buffer_size);
-    void setup_view(int* sizes,
-                    long long* displacements,
-                    int nelements,
-                    MPI_Offset start_offset,
-                    long max_buffer);
-    void open_file();
-    void setup_subcomms();
-    void finalize();
-    void setup_file_view(int* sizes, long long* displacements, int n);
+    void setup_file_view(const int* sizes, const long long* displacements, int n);
+    void create_sender_type(MPI_Datatype& type, int nsteps);
+    void setup_communicators();
 
-    void write(void* data);
+  public:
+    ReportWriter(std::string filename, MPI_Comm comm, bool to_verbose = false);
+    long number_steps_can_buffer(long report_size, long max_buffer_size);
+    void setup_view(const int* sizes,
+                    const long long* displacements,
+                    int nelements,
+                    MPI_Offset offset,
+                    long max_buffer);
+    void finalize();
+    void write(void* data, int nsteps);
+    void print_stat(int nsteps);
 };
 
-#endif  // MPI_MEM_USAGE_FILE_WRITER_H
+extern void CHECK_ERROR(int);
+
+#endif  // REPORT_WRITER_H

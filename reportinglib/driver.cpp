@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <iostream>
 #include <string.h>
-#include "utils.h"
+#include "report_utils.h"
 
 //-----------------------------------------------------------------------------------------------
 // Open file with MPI (delete old file if require)
@@ -82,9 +82,17 @@ int prepareFileView(MPI_File& fh,
         viewIndex++;
     }
 
+    MPI_Offset my_displacement = displacementTotal;
+    MPI_Allreduce(&my_displacement, &displacementTotal, 1, MPI_OFFSET, MPI_MAX, comm_report);
+
     // final displacement contains length of total data which we can now store for
     // save data (handled normal reports above)
     disp[viewIndex] = displacementTotal;
+
+    // for debugging print end position
+    if(my_displacement == displacementTotal) {
+         printf(" REPORTINGLIB DISPLACEMENT %ld ( + %ld = %ld)\n", displacementTotal, position_to_write, displacementTotal+position_to_write);
+    }
 
     // Apply the view
     MPI_Datatype filetype;  // file's view of frame.
@@ -93,10 +101,10 @@ int prepareFileView(MPI_File& fh,
 
     // reopen the file
     int error = open(report_filename, fh, comm_report, MPI_MODE_WRONLY);
-    check_mpi_error(error);
+    CHECK_ERROR(error);
 
     error = MPI_File_set_view(fh, position_to_write, MPI_BYTE, filetype, "native", MPI_INFO_NULL);
-    check_mpi_error(error);
+    CHECK_ERROR(error);
 
     MPI_Type_free(&filetype);
     delete[] length;
@@ -110,7 +118,7 @@ int prepareFileView(MPI_File& fh,
 // Scenario preparation functions
 //-----------------------------------------------------------------------------------------------
 
-void loadReportData(std::string inputFile, ReportingData& rdata, int rank) {
+void loadReportData(std::string inputFile, ReportingData& rdata, int rank, int buffered_steps) {
     FILE* dataLoad = fopen(inputFile.c_str(), "r");
     if (!dataLoad) {
         if (rank == 0)
@@ -139,6 +147,7 @@ void loadReportData(std::string inputFile, ReportingData& rdata, int rank) {
     rdata.ngids = 0;
 
     long long int mappingMaxDisp = 0;
+    long long int dataMaxDisp = 0;
 
     for (int i = 0; i < oldsize; i++) {
         iRes = fscanf(dataLoad, "%d", &cell_pieces);
@@ -157,6 +166,9 @@ void loadReportData(std::string inputFile, ReportingData& rdata, int rank) {
                 if (rdata.mappingDisp[j] > mappingMaxDisp) {
                     mappingMaxDisp = rdata.mappingDisp[j];
                 }
+                if (rdata.disp[j] > dataMaxDisp) {
+                    dataMaxDisp = rdata.disp[j];
+                }
             }
         } else {
             for (int j = 0; j < cell_pieces; j++) {
@@ -171,9 +183,13 @@ void loadReportData(std::string inputFile, ReportingData& rdata, int rank) {
     MPI_Allreduce(&mappingMaxDisp, &mappingGlobalMaxDisp, 1, MPI_LONG_LONG, MPI_MAX,
                   MPI_COMM_WORLD);
 
-    if (rank == 0) {
-        printf("max mapping offset is %lld\n", mappingGlobalMaxDisp);
-    }
+    long long int dataGlobalMaxDisp = 0;
+    MPI_Allreduce(&dataMaxDisp, &dataGlobalMaxDisp, 1, MPI_LONG_LONG, MPI_MAX,
+                  MPI_COMM_WORLD);
+
+    //if (rank == 0) {
+    //    printf("max mapping offset is %lld and max data osset is %lld\n", mappingGlobalMaxDisp, dataGlobalMaxDisp);
+    //}
 
     // populate fake data
     // TODO: maybe also make it so that instead split cells owuld get same char
@@ -198,25 +214,32 @@ void loadReportData(std::string inputFile, ReportingData& rdata, int rank) {
         rdata.fakemapping[rdata.len * sizeof(int) - 1] = '\n';
     }
 
-    rdata.fakedata = new char[rdata.ntotaldata + 1];
-    fakeOffset = 0;
+    rdata.fakedata = new char[(rdata.ntotaldata * buffered_steps) + 1];
+    char *fakedata = rdata.fakedata;
 
-    // TODO: print meta data into the start of the line.  So far, that meta data
-    // has been shorter than the data length :|
-    for (int j = 0; j < rdata.len; j++) {
-        int adjust =
-            sprintf(&rdata.fakedata[fakeOffset], "%d %d - ", rdata.gids[j], rdata.sizes[j]);
-        fakeOffset += adjust;
+    for(int i = 0; i < buffered_steps; i++) {
+        fakeOffset = 0;
+        // TODO: print meta data into the start of the line.  So far, that meta data
+        // has been shorter than the data length :|
+        for (int j = 0; j < rdata.len; j++) {
+            int adjust =
+                sprintf(&fakedata[fakeOffset], "%d %d - ", rdata.gids[j], rdata.sizes[j]);
+            fakeOffset += adjust;
 
-        char selection = garbage[rdata.gids[j] % 64];
-        for (int k = adjust; k < rdata.sizes[j] - 1; k++) {
-            rdata.fakedata[fakeOffset++] = selection;
+            char selection = garbage[rdata.gids[j] % 64];
+            for (int k = adjust; k < rdata.sizes[j] - 2; k++) {
+                fakedata[fakeOffset++] = selection;
+            }
+            fakedata[fakeOffset++] = '-';
+            fakedata[fakeOffset++] = '-';
         }
-        rdata.fakedata[fakeOffset++] = '\n';
+        fakedata += rdata.ntotaldata;
     }
 
-    rdata.fakedata[rdata.ntotaldata] = 0;  // we should never print this data, but add the null
-                                           // terminator in case we mistakely try
+    //rdata.fakedata[rdata.ntotaldata*buffered_steps-1] = '\n';  // we should never print this data, but add the null
+    rdata.fakedata[rdata.ntotaldata*buffered_steps] = 0;  // we should never print this data, but add the null
+                                                    // terminator in case we mistakely try
+    //printf("->%s \n", rdata.fakedata);
 }
 
 void demo_program_write_header(MPI_Comm comm_world,
@@ -233,7 +256,7 @@ void demo_program_write_header(MPI_Comm comm_world,
 
     if (rank == 0) {
         int error = open(report_filename, fh, MPI_COMM_SELF, MPI_MODE_CREATE | MPI_MODE_WRONLY);
-        check_mpi_error(error);
+        CHECK_ERROR(error);
         MPI_File_close(&fh);
     }
 
@@ -250,7 +273,8 @@ void demo_program_write_header(MPI_Comm comm_world,
 
 void demo_program_write_data(MPI_Comm comm_world,
                              ReportingData& rdata,
-                             std::string report_filename) {
+                             std::string report_filename,
+                             int buffered_steps) {
     int rank;
     MPI_Comm_rank(comm_world, &rank);
 
@@ -262,9 +286,14 @@ void demo_program_write_data(MPI_Comm comm_world,
 
     // after the mapping, the file advances to sizeof(int)*(sum of len across nodes)
     MPI_Offset start_offset = sizeof(int) * rdata.ngids;
-    prepareFileView(fh, report_filename, start_offset, rdata.sizes, rdata.disp, rdata.len,
-                    comm_report);
-    MPI_File_write_all(fh, rdata.fakedata, rdata.ntotaldata, MPI_BYTE, &status);
+    prepareFileView(fh, report_filename, start_offset, rdata.sizes, rdata.disp, rdata.len, comm_report);
+
+    // write multiple times : should remove with single write
+    char *fakedata = rdata.fakedata;
+    for(int i = 0; i < buffered_steps; i++) {
+        MPI_File_write_all(fh, fakedata, rdata.ntotaldata, MPI_BYTE, &status);
+        fakedata += rdata.ntotaldata;
+    }
 
     MPI_File_close(&fh);
     MPI_Comm_free(&comm_report);

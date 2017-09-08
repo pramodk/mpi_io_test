@@ -4,7 +4,7 @@ OPTFLAGS = -O0
 CXXFLAGS = $(OPTFLAGS) -g -I.
 
 DEPS = utils.h
-OBJ = main.o utils.o ReportWriter.o reportinglib/driver.o  main.o
+OBJ = main.o reportinglib/report_utils.o ReportWriter.o reportinglib/driver.o  main.o
 
 all: mpiio
 

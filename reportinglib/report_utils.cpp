@@ -18,7 +18,18 @@
 #include <mpi.h>
 #include <stdlib.h>
 #include <iostream>
-#include "utils.h"
+#include "report_utils.h"
+
+
+ReportingData::~ReportingData() {
+    delete[] gids;
+    delete[] sizes;
+    delete[] mappingDisp;
+    delete[] disp;
+    delete[] mappingCount;
+    delete[] fakemapping;
+    delete[] fakedata;
+}
 
 uint64_t usageInBytes(int item) {
 #if defined(BLUEGENEQ)
@@ -86,11 +97,11 @@ double memUsageInfo(const char* msg) {
     MPI_Bcast(&avgUsageMB, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
-        printf("\t => MEMUSAGE :: ");
+        printf(" MEMUSAGE ");
         if (msg) {
-            printf(" %32s ", msg);
+            printf(" (%s) ", msg);
         }
-        printf(" Max = %.3lfMB Min = %.3lfMB Mean = %.3lfMB\n", maxUsageMB, minUsageMB, avgUsageMB);
+        printf(" MAX %.3lfMB MIN = %.3lfMB MEAN %.3lfMB\n", maxUsageMB, minUsageMB, avgUsageMB);
     }
 
     return usageMB;
@@ -100,23 +111,25 @@ double memUsageInfo(const char* msg) {
 // Check MPI Error
 //-----------------------------------------------------------------------------------------------
 
-void check_mpi_error(int& error) {
+void CHECK_ERROR(int error) {
     if (error != MPI_SUCCESS) {
         std::cerr << "Error in MPI Operation" << std::endl;
         char message[1024];
         int mlength;
         MPI_Error_string(error, message, &mlength);
         std::cerr << "MPI: " << message << std::endl;
-        //abort();
+        abort();
     }
 }
 
-ReportingData::~ReportingData() {
-    delete[] gids;
-    delete[] sizes;
-    delete[] mappingDisp;
-    delete[] disp;
-    delete[] mappingCount;
-    delete[] fakemapping;
-    delete[] fakedata;
+void calculat_total_file_size(int ngids, MPI_Offset report_size, int buffer_steps, int comm_rank, MPI_Comm comm) {
+    MPI_Offset total_bytes = 0;
+
+    MPI_Allreduce(&report_size, &total_bytes, 1, MPI_OFFSET, MPI_SUM, comm);
+    total_bytes *= buffer_steps;
+    total_bytes += sizeof(int) * ngids;
+
+    if(comm_rank == 0) {
+        printf(" CALCULATED SIZE OF OUTPUT REPORT FILE : %ld \n", total_bytes);
+    }
 }

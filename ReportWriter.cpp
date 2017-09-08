@@ -1,32 +1,44 @@
-//
-// Created by Kumbhar Pramod Shivaji on 15.08.17.
-//
-
 #include <stdlib.h>
 #include <climits>
+#include <algorithm>
 #include "ReportWriter.h"
-#include "utils.h"
 
-ReportWriter::ReportWriter(std::string rname, std::string fname, MPI_Comm comm) {
-    report_name = rname;
+typedef std::pair<long long, int> OffsetIndexPairType;
+bool comparator(const OffsetIndexPairType& l, const OffsetIndexPairType& r) {
+    return l.first < r.first;
+}
+
+template <typename T>
+std::vector<T> makeVector(const T* data, size_t N) {
+    return std::vector<T>(data, data + N);
+}
+
+ReportWriter::ReportWriter(std::string fname, MPI_Comm comm, bool to_verbose) {
     filename = fname;
     report_comm = comm;
     report_size = 0;
     max_report_buffer_size = 0;
     is_aggregator = false;
-    aggregator_report_size = 0;
+    ag_report_size = 0;
+    subcomm_report_size = 0;
+    verbose = to_verbose;
 
     sub_report_comm = MPI_COMM_NULL;
     aggregator_comm = MPI_COMM_NULL;
-    data = NULL;
 
     MPI_Comm_size(report_comm, &report_comm_size);
     MPI_Comm_rank(report_comm, &report_comm_rank);
+
+    verbose = verbose && (report_comm_rank == 0);
 }
 
-long ReportWriter::number_steps_can_buffer(long report_size, long max_buffer_size) {
+long ReportWriter::number_steps_can_buffer(long rsize, long max_buffer_size) {
     // first check how many report steps this rank can buffer
-    long steps = max_buffer_size / report_size;
+    long steps = INT_MAX;
+
+    if (rsize) {
+        steps = max_buffer_size / rsize;
+    }
 
     long max_buffer_steps = 0;
 
@@ -36,22 +48,16 @@ long ReportWriter::number_steps_can_buffer(long report_size, long max_buffer_siz
     return max_buffer_steps;
 }
 
-void ReportWriter::open_file() {
-
-    // only aggregator ranks open file for writing
-    MPI_File_open(aggregator_comm, (char*)filename.c_str(), MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
-}
-
-void ReportWriter::setup_subcomms() {
-    std::vector<long> num_bytes;
+void ReportWriter::setup_communicators() {
+    std::vector<long> all_report_sizes;
     std::vector<long> aggregator_num_bytes;
 
     if (report_comm_rank == 0) {
-        num_bytes.resize(report_comm_size);
+        all_report_sizes.resize(report_comm_size);
     }
 
     // gather number of bytes to be written by all ranks
-    MPI_Gather(&report_size, 1, MPI_LONG, &num_bytes[0], 1, MPI_LONG, 0, report_comm);
+    CHECK_ERROR(MPI_Gather(&report_size, 1, MPI_LONG, &all_report_sizes[0], 1, MPI_LONG, 0, report_comm));
 
     std::vector<int> comm_ids;
 
@@ -66,13 +72,15 @@ void ReportWriter::setup_subcomms() {
         // calculate who will be the aggregator ranks. There will
         // be aggregator rank after every max_report_buffer_size
         for (size_t i = 0; i < report_comm_size; i++) {
-            if ((aggregated_bytes + num_bytes[i]) > max_report_buffer_size) {
-                aggregator_rank = i;
-                aggregated_bytes = 0;
+            if (all_report_sizes[i] > 0) {
+                if ((aggregated_bytes + all_report_sizes[i]) > max_report_buffer_size) {
+                    aggregator_rank = i;
+                    aggregated_bytes = 0;
+                }
+                comm_ids[i] = aggregator_rank;
+                aggregated_bytes += all_report_sizes[i];
+                aggregator_num_bytes[aggregator_rank] = aggregated_bytes;
             }
-            comm_ids[i] = aggregator_rank;
-            aggregated_bytes += num_bytes[i];
-            aggregator_num_bytes[aggregator_rank] = aggregated_bytes;
         }
     }
 
@@ -91,21 +99,33 @@ void ReportWriter::setup_subcomms() {
     MPI_Comm_split(report_comm, comm_id, report_comm_rank, &aggregator_comm);
 
     if(report_comm_rank == 0) {
-        printf(" SUMMARY : TOTAL RANKS : %d TOTAL AGGREGATORS : %d \n", report_comm_size, aggregator_comm_size());
+        printf("\n SUMMARY : TOTAL RANKS : %d TOTAL AGGREGATORS : %d \n", report_comm_size, aggregator_comm_size());
     }
 }
 
-void ReportWriter::setup_file_view(int* sizes, long long* displacements, int nelements) {
-    std::vector<int> subcomm_nelements;
-    long total_subcomm_nelements = 0;
+void ReportWriter::setup_file_view(const int* sizes, const long long* displacements, int npieces) {
+    // each cell element could be of different size
+    std::vector<int> ag_report_sizes;
+
+    // each cell element has offsets
+    std::vector<long long> ag_report_file_disp;
+
+    // receiver i.e. aggregator will gather data in mmeory from offset 0
+    // these are offsets at which other ranks will sending data
+    std::vector<MPI_Aint> ag_report_mem_disp;
+
+    std::vector<int> subcomm_npieces;
+
+    long total_subcomm_npieces = 0;
+
+    sender_displacements.resize(npieces);
 
     if (is_aggregator) {
-        // subcomm_report_sizes.resize(sub_report_comm_size());
-        subcomm_nelements.resize(sub_report_comm_size());
+        subcomm_npieces.resize(sub_report_comm_size());
     }
 
     // each rank could have different elements, gather those on master rank in sub comm
-    MPI_Gather(&nelements, 1, MPI_INT, &subcomm_nelements[0], 1, MPI_INT, 0, sub_report_comm);
+    MPI_Gather(&npieces, 1, MPI_INT, &subcomm_npieces[0], 1, MPI_INT, 0, sub_report_comm);
 
     std::vector<int> s_displacements;
 
@@ -113,142 +133,238 @@ void ReportWriter::setup_file_view(int* sizes, long long* displacements, int nel
     // gatherv and hence need to calculate displacements
     if (is_aggregator) {
         s_displacements.resize(sub_report_comm_size());
-        for (size_t i = 0; i < subcomm_nelements.size(); i++) {
-            s_displacements[i] = total_subcomm_nelements;
-            total_subcomm_nelements += subcomm_nelements[i];
+
+        for (size_t i = 0; i < subcomm_npieces.size(); i++) {
+            s_displacements[i] = total_subcomm_npieces;
+            total_subcomm_npieces += subcomm_npieces[i];
         }
     }
 
     // allocate memory on aggreegator ranks
     if (is_aggregator) {
-        aggregated_report_sizes.resize(total_subcomm_nelements);
-        aggregated_report_displacements.resize(total_subcomm_nelements);
+        ag_report_sizes.resize(total_subcomm_npieces + 2);
+        ag_report_file_disp.resize(total_subcomm_npieces);
+        ag_report_mem_disp.resize(total_subcomm_npieces);
     }
 
     // gather sizes
-    MPI_Gatherv(sizes, nelements, MPI_INT, &aggregated_report_sizes[0], &subcomm_nelements[0],
-                &s_displacements[0], MPI_INT, 0, sub_report_comm);
+    MPI_Gatherv((void*)sizes, npieces, MPI_INT, &ag_report_sizes[1], &subcomm_npieces[0], &s_displacements[0], MPI_INT,
+                0, sub_report_comm);
 
     // gather displacements
-    MPI_Gatherv(displacements, nelements, MPI_LONG_LONG, &aggregated_report_displacements[0],
-                &subcomm_nelements[0], &s_displacements[0], MPI_LONG_LONG, 0, sub_report_comm);
+    MPI_Gatherv((void*)displacements, npieces, MPI_LONG_LONG, &ag_report_file_disp[0], &subcomm_npieces[0],
+                &s_displacements[0], MPI_LONG_LONG, 0, sub_report_comm);
 
-    aggregator_report_size = 0;
+    ag_report_size = 0;
 
     if (is_aggregator) {
-        std::vector<MPI_Aint> file_displacements;
-        file_displacements.resize(total_subcomm_nelements);
-        subcomm_displacements.resize(sub_report_comm_size());
-        subcomm_report_sizes.resize(sub_report_comm_size());
+        std::vector<MPI_Aint> file_disp;
+        std::vector<MPI_Datatype> data_types;
 
-        size_t k = 0;
+        file_disp.resize(total_subcomm_npieces + 2);
+        data_types.resize(total_subcomm_npieces + 2);
+
+        ag_report_sizes[0] = 1;
+        ag_report_sizes[total_subcomm_npieces + 1] = 1;
+
+        file_disp[0] = 0;
+        file_disp[total_subcomm_npieces + 1] = 0;
+
+        data_types[0] = MPI_LB;
+        data_types[total_subcomm_npieces + 1] = MPI_UB;
+
         size_t offset = 0;
-        int length = 0;
 
-        for (size_t i = 0; i < sub_report_comm_size(); i++) {
-            length = 0;
-            for (size_t j = 0; j < subcomm_nelements[i]; j++) {
-                file_displacements[k] = (MPI_Offset)aggregated_report_displacements[k];
-                length += aggregated_report_sizes[k];
-                aggregator_report_size += aggregated_report_sizes[k];
-                k++;
-            }
+        // first build offset index vector
+        std::vector<OffsetIndexPairType> ofsetIndex;
 
-            subcomm_displacements[i] = offset;
-            subcomm_report_sizes[i] = length;
-            offset += length;
+        for (int i = 0; i < total_subcomm_npieces; i++) {
+            ofsetIndex.push_back(std::make_pair(ag_report_file_disp[i], i));
         }
 
-        int error = MPI_Type_create_hindexed(total_subcomm_nelements, &aggregated_report_sizes[0],
-                                             &file_displacements[0], MPI_BYTE, &filetype);
+        // sort now
+        std::sort(ofsetIndex.begin(), ofsetIndex.end(), comparator);
+        std::vector<int> indexOrder;
 
-        MPI_Type_commit(&filetype);
-        check_mpi_error(error);
+        for (int i = 0; i < total_subcomm_npieces; i++) {
+            indexOrder.push_back(ofsetIndex[i].second);
+        }
 
-        error = MPI_File_set_view(fh, start_offset, MPI_BYTE, filetype, "native", MPI_INFO_NULL);
+        MPI_Aint displacementTotal = 0;
+        std::vector<int> sizes;
+        size_t k = 0;
 
-        MPI_Type_free(&filetype);
-        check_mpi_error(error);
+        // just to set size to total_subcomm_npieces +2 and get 0 and last element initialized
+        sizes = ag_report_sizes;
+
+        MPI_Aint mem_offset = 0;
+
+        for (size_t i = 0; i < sub_report_comm_size(); i++) {
+            for (size_t j = 0; j < subcomm_npieces[i]; j++) {
+                int order = indexOrder[k];
+                file_disp[k + 1] = ag_report_file_disp[order];
+                sizes[k + 1] = ag_report_sizes[order + 1];
+
+                ag_report_mem_disp[order] = mem_offset;
+                mem_offset += ag_report_sizes[order + 1];
+
+                ag_report_size += ag_report_sizes[order + 1];
+
+                displacementTotal = file_disp[k + 1] + ag_report_sizes[order + 1];
+                data_types[k + 1] = MPI_BYTE;
+                k++;
+            }
+        }
+
+        subcomm_report_size = ag_report_size;
+
+        MPI_Aint max_displacementTotal = 0;
+        MPI_Allreduce(&displacementTotal, &max_displacementTotal, 1, MPI_AINT, MPI_MAX, aggregator_comm);
+
+#ifdef DEBUG
+        if (max_displacementTotal == displacementTotal) {
+            printf(" MAX AGGREGATOR DISPLACEMENT %ld (+ %ld = %ld)\n", displacementTotal, file_offset,
+                   displacementTotal + file_offset);
+        }
+#endif
+
+        file_disp[total_subcomm_npieces + 1] = max_displacementTotal;
+
+        CHECK_ERROR(MPI_Type_struct(total_subcomm_npieces + 2, &sizes[0], &file_disp[0], &data_types[0], &filetype));
+        CHECK_ERROR(MPI_Type_commit(&filetype));
+        CHECK_ERROR(MPI_File_open(aggregator_comm, (char*)filename.c_str(), MPI_MODE_WRONLY, MPI_INFO_NULL, &fh));
+        CHECK_ERROR(MPI_File_set_view(fh, file_offset, MPI_BYTE, filetype, "native", MPI_INFO_NULL));
+        CHECK_ERROR(MPI_Type_free(&filetype));
     }
+
+    // provide each rank displacement in aggregators memory
+    MPI_Scatterv(&ag_report_mem_disp[0], &subcomm_npieces[0], &s_displacements[0], MPI_AINT, &sender_displacements[0],
+                 npieces, MPI_AINT, 0, sub_report_comm);
+
+    // everyone one knows total size in subcomm to calculate
+    // datatype used for mpi_put in window
+    MPI_Bcast(&subcomm_report_size, 1, MPI_LONG, 0, sub_report_comm);
+}
+
+void ReportWriter::create_sender_type(MPI_Datatype& type, int nsteps) {
+    std::vector<int> sizes;
+    std::vector<MPI_Aint> displacements;
+
+    sizes.resize(sender_npieces * nsteps);
+    displacements.resize(sender_npieces * nsteps);
+
+    for (int i = 0; i < nsteps; i++) {
+        for (int j = 0; j < sender_npieces; j++) {
+            // report sizes remain same for multiple time steps
+            sizes[i * sender_npieces + j] = sender_sizes[j];
+            // when there are multiple steps, we have to add step_number * report_size_of_aggregator
+            displacements[i * sender_npieces + j] = sender_displacements[j] + i * subcomm_report_size;
+        }
+    }
+
+    CHECK_ERROR(MPI_Type_create_hindexed(sender_npieces * nsteps, &sizes[0], &displacements[0], MPI_BYTE, &type));
+    CHECK_ERROR(MPI_Type_commit(&type));
 }
 
 void ReportWriter::finalize() {
     MPI_Comm_free(&sub_report_comm);
     MPI_Comm_free(&aggregator_comm);
-    if(is_aggregator)
+    if (is_aggregator)
         MPI_File_close(&fh);
 }
 
-void ReportWriter::setup_view(int* sizes,
-                              long long* displacements,
-                              int nelements,
-                              MPI_Offset position,
+void ReportWriter::setup_view(const int* sizes,
+                              const long long* displacements,
+                              int npieces,
+                              MPI_Offset offset,
                               long buffer_size) {
     max_report_buffer_size = buffer_size;
-    start_offset = position;
+    file_offset = offset;
+    sender_npieces = npieces;
+    sender_sizes = std::vector<int>(sizes, sizes + npieces);
 
-    for (int i = 0; i < nelements; i++) {
+    report_size = 0;
+    for (int i = 0; i < npieces; i++) {
         report_size += sizes[i];
     }
 
     // once we calculate report_size and know buffer size then we can setup subcomms
-    setup_subcomms();
+    setup_communicators();
 
-    // open file for writing
-    if(is_aggregator)
-        open_file();
-
-    // setup mpi file view
-    setup_file_view(sizes, displacements, nelements);
+    setup_file_view(sizes, displacements, npieces);
 }
 
-void ReportWriter::write(void* data) {
-    MPI_Status status;
-
-    void* aggregated_data = NULL;
-    if (is_aggregator)
-        aggregated_data = calloc(1, aggregator_report_size);
-
-    if (aggregator_report_size > INT_MAX) {
-        std::cerr << "ERROR : Aggregator report buffer size > INT_MAX \n";
+void ReportWriter::print_stat(int nsteps) {
+    if (ag_report_size * nsteps > INT_MAX) {
+        printf("ERROR : Aggregator report buffer size > INT_MAX (overflow of 4GB on rank %d) \n", report_comm_rank);
         abort();
     }
 
-    MPI_Barrier(report_comm);
+    if (is_aggregator) {
+        MPI_Offset local_size = ag_report_size * nsteps;
+        MPI_Offset min_aggregator_size = 0;
+        MPI_Offset max_aggregator_size = 0;
 
-    printf("R. %d REPORT %ld BYTES AGGREGATING %ld BYTES IS_AGGREGATOR %d\n", report_comm_rank, report_size,
-           aggregator_report_size, int(is_aggregator));
+        MPI_Allreduce(&local_size, &min_aggregator_size, 1, MPI_OFFSET, MPI_MIN, aggregator_comm);
+        MPI_Allreduce(&local_size, &max_aggregator_size, 1, MPI_OFFSET, MPI_MAX, aggregator_comm);
 
-    if(report_comm_rank == 0) {
+        if (verbose) {
+            printf(" AGGREGATOR MAX SIZE  %ld  MIN SIZE %ld\n", max_aggregator_size, min_aggregator_size);
+        }
+    }
+}
+
+void ReportWriter::write(void* data, int nsteps) {
+    MPI_Status status;
+    MPI_Datatype sender_type;
+    void* aggregated_data;
+
+    print_stat(nsteps);
+
+    if (verbose) {
         printf(" STARTED DATA AGGREGATION \n");
     }
 
-    int error =
-        MPI_Gatherv(data, (int)report_size, MPI_BYTE, aggregated_data, &subcomm_report_sizes[0],
-                    &subcomm_displacements[0], MPI_BYTE, 0, sub_report_comm);
+    create_sender_type(sender_type, nsteps);
 
-    check_mpi_error(error);
-    MPI_Barrier(report_comm);
+    MPI_Win win;
 
-    if(report_comm_rank == 0) {
+#ifdef MPI3
+    CHECK_ERROR(
+        MPI_Win_allocate(MPI_Aint(ag_report_size * nsteps), 1, MPI_INFO_NULL, sub_report_comm, &aggregated_data, &win));
+#else
+    if(ag_report_size*nsteps) {
+        aggregated_data = calloc(ag_report_size, nsteps);
+        if(aggregated_data == NULL) {
+            printf("ERROR : Memory allocation failed for aggregation\n");
+            abort();
+        }
+    }
+    CHECK_ERROR(
+        MPI_Win_create(aggregated_data, MPI_Aint(ag_report_size * nsteps), 1, MPI_INFO_NULL, sub_report_comm, &win));
+#endif
+
+    CHECK_ERROR(MPI_Win_fence(0, win));
+    CHECK_ERROR(MPI_Put(data, report_size * nsteps, MPI_BYTE, 0, 0, 1, sender_type, win));
+    CHECK_ERROR(MPI_Win_fence(0, win));
+
+    if (verbose) {
         printf(" FINISHED DATA AGGREGATION \n");
     }
 
     if (is_aggregator) {
-        // has problem!
-        //error = MPI_File_write_all(fh, aggregated_data, aggregator_report_size, MPI_BYTE, &status);
-
-        // no problem with non collective version when we enable aggregation
-        error = MPI_File_write(fh, aggregated_data, aggregator_report_size, MPI_BYTE, &status);
-        check_mpi_error(error);
+        CHECK_ERROR(MPI_File_write_all(fh, aggregated_data, ag_report_size * nsteps, MPI_BYTE, &status));
     }
 
-    MPI_Barrier(report_comm);
-
-    if(report_comm_rank == 0) {
+    if (verbose) {
         printf(" FINISHED DATA WRITING \n");
     }
 
-    if (is_aggregator)
+#ifndef MPI3
+    if (ag_report_size*nsteps)
         free(aggregated_data);
+#endif
+
+    CHECK_ERROR(MPI_Type_free(&sender_type));
+    CHECK_ERROR(MPI_Win_free(&win));
 }
